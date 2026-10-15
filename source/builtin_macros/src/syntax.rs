@@ -1866,7 +1866,7 @@ impl Visitor {
         // Therefore, we leave arbitrary named stubs in the place of the erased ghost items:
         // - For erased pub spec or proof Fn item x, keep decl, replace body with panic!()
         // - For erased pub Const item x, keep as-is (REVIEW: it's not clear what expressions we can support)
-        // - For erased non-pub Fn and Const item x, leave "use bool as x;"
+        // - For erased non-pub Fn and Const item x, leave a stub "fn x()" along with its attributes (cfg, cfg_attr, test)
         // - Leave Struct and Enum as-is (REVIEW: we could leave stubs with PhantomData fields)
         for item in items.iter_mut() {
             let span = item.span();
@@ -1900,7 +1900,7 @@ impl Visitor {
                     | FnMode::ProofAxiom(_)
                         if erase_ghost =>
                     {
-                        Some((fun.sig.ident.clone(), fun.vis.clone()))
+                        Some((fun.sig.ident.clone(), fun.vis.clone(), fun.attrs.clone()))
                     }
                     _ => None,
                 },
@@ -1912,7 +1912,7 @@ impl Visitor {
                         | FnMode::SpecChecked(_)
                         | FnMode::Proof(_)
                         | FnMode::ProofAxiom(_),
-                    ) if erase_ghost => Some((c.ident.clone(), c.vis.clone())),
+                    ) if erase_ghost => Some((c.ident.clone(), c.vis.clone(), c.attrs.clone())),
                     _ => None,
                 },
                 /*
@@ -1931,10 +1931,15 @@ impl Visitor {
                 */
                 _ => None,
             };
-            if let Some((name, vis)) = erase_fn {
-                *item = Item::Verbatim(quote_spanned! {
+            if let Some((name, vis, attrs)) = erase_fn {
+                let mut item_fn: ItemFn = parse_quote_spanned! {
                     span => #[allow(unused_imports)] #vis fn #name() { unimplemented!() }
-                });
+                };
+                // Preserve attributes that control whether the item is present
+                item_fn.attrs.extend(attrs.into_iter().filter(|attr| {
+                    ["cfg", "cfg_attr", "test"].iter().any(|s| path_is_ident(attr.path(), s))
+                }));
+                *item = Item::Verbatim(item_fn.to_token_stream());
             }
         }
         for item in items.iter_mut() {
